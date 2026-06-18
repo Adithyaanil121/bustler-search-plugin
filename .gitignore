@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+query_cache.json
+search_counts.json
+skill_vectors.json
+*.mp4
+*.webp
+scratch/
