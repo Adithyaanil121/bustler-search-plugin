@@ -2,197 +2,569 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Bustler Search Test</title>
   <style>
-    body { font-family: -apple-system, sans-serif; background: #f3f4f6; padding: 50px; display: flex; justify-content: center; }
-    .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 600px; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f3f4f6; padding: 50px 16px;
+      display: flex; justify-content: center; min-height: 100vh;
+    }
+
+    /* ── Search Card ── */
+    .card {
+      background: white; padding: 40px; border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+      width: 100%; max-width: 600px; height: fit-content;
+    }
+    .card h2 { margin-bottom: 24px; color: #111827; font-size: 22px; }
     .search-container { position: relative; width: 100%; }
-    .search-input { width: 100%; padding: 12px 16px; font-size: 16px; border: 1px solid #d1d5db; border-radius: 8px; outline: none; box-sizing: border-box; }
-    .search-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
-    .dropdown { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; background: white; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: none; z-index: 100; max-height: 360px; overflow-y: auto; }
+    .search-input {
+      width: 100%; padding: 14px 18px; font-size: 16px;
+      border: 1.5px solid #d1d5db; border-radius: 10px; outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .search-input:focus { border-color: #0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,0.12); }
+
+    /* ── Dropdown ── */
+    .dropdown {
+      position: absolute; top: 100%; left: 0; right: 0; margin-top: 6px;
+      background: white; border: 1px solid #e5e7eb; border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.1); display: none;
+      z-index: 100; max-height: 360px; overflow-y: auto;
+    }
     .dropdown.visible { display: block; }
-    .section-label { padding: 8px 14px 4px; font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
-    .item { padding: 10px 16px; font-size: 15px; cursor: pointer; border-bottom: 1px solid #f3f4f6; display: flex; align-items: center; gap: 8px; }
-    .item:last-child { border-bottom: none; }
-    .item:hover { background-color: #f3f4f6; }
-    .item .icon { font-size: 13px; color: #9ca3af; flex-shrink: 0; }
-    .loading { padding: 10px 16px; font-size: 14px; color: #9ca3af; font-style: italic; }
-    .clear-history { padding: 8px 14px; font-size: 12px; color: #6366f1; cursor: pointer; text-align: right; }
+    .section-label { padding: 10px 16px 4px; font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
+    .dd-item { padding: 12px 18px; font-size: 15px; cursor: pointer; border-bottom: 1px solid #f3f4f6; display: flex; align-items: center; gap: 10px; transition: background 0.15s; }
+    .dd-item:last-child { border-bottom: none; }
+    .dd-item:hover { background-color: #f3f4f6; }
+    .dd-item .icon { font-size: 14px; color: #9ca3af; flex-shrink: 0; }
+    .dd-loading { padding: 12px 18px; font-size: 14px; color: #9ca3af; font-style: italic; }
+    .clear-history { padding: 8px 16px; font-size: 12px; color: #0d9488; cursor: pointer; text-align: right; }
     .clear-history:hover { text-decoration: underline; }
+
+    .search-btn {
+      margin-top: 16px; width: 100%; padding: 14px;
+      background: #0d9488; color: white; border: none; border-radius: 10px;
+      font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.1s;
+    }
+    .search-btn:hover { background: #0f766e; }
+    .search-btn:active { transform: scale(0.98); }
+
+    /* ════════════════════════════════════════════════════════════════════
+       FULL-SCREEN RESULTS OVERLAY
+       ════════════════════════════════════════════════════════════════════ */
+    .results-overlay {
+      position: fixed; inset: 0; background: #f5f5f5; z-index: 9999;
+      display: none; flex-direction: column; overflow: hidden;
+      transform: translateY(100%);
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .results-overlay.visible { display: flex; }
+    .results-overlay.active { transform: translateY(0); }
+
+    /* ── Teal Header ── */
+    .teal-header {
+      background: #0d9488; padding: 0 0 20px 0;
+      border-radius: 0 0 20px 20px; flex-shrink: 0;
+    }
+    .header-top-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 16px 10px;
+    }
+    .header-icon-btn {
+      width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+      background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;
+    }
+    .header-search-row { display: flex; align-items: center; padding: 0 16px; margin-bottom: 16px; position: relative; }
+    .header-search-bar {
+      flex: 1; display: flex; align-items: center;
+      background: #ffffff; border-radius: 25px; padding: 10px 16px; margin-right: 10px;
+    }
+    .header-search-bar .search-icon { font-size: 16px; color: #9ca3af; margin-right: 8px; flex-shrink: 0; }
+    .header-search-bar input { flex: 1; border: none; outline: none; font-size: 16px; color: #111827; background: transparent; }
+    .header-search-bar .clear-btn { font-size: 16px; color: #9ca3af; cursor: pointer; background: none; border: none; padding: 4px; display: none; }
+    .header-search-bar .clear-btn.show { display: block; }
+    .search-arrow-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: #fff; font-size: 24px; font-weight: 700; cursor: pointer; }
+    .hero-title { font-size: 28px; font-weight: 800; color: #ffffff; padding: 0 20px; margin-bottom: 4px; }
+    .hero-subtitle { font-size: 15px; color: rgba(255,255,255,0.8); padding: 0 20px; }
+
+    /* ── Results Body ── */
+    .results-body { flex: 1; overflow-y: auto; padding: 0 16px 32px; }
+    .results-body::-webkit-scrollbar { width: 6px; }
+    .results-body::-webkit-scrollbar-track { background: transparent; }
+    .results-body::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+    .result-count { font-size: 16px; font-weight: 600; color: #374151; padding: 14px 4px; }
+
+    /* ── Result Card ── */
+    .result-card {
+      background: #ffffff; border-radius: 14px; padding: 12px; margin-bottom: 12px;
+      display: flex; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      transition: box-shadow 0.2s, transform 0.15s; cursor: pointer;
+    }
+    .result-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-1px); }
+    .card-thumbnail { width: 110px; height: 110px; border-radius: 12px; flex-shrink: 0; overflow: hidden; }
+    .card-thumbnail img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .card-avatar { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+    .card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+    .card-title { font-size: 17px; font-weight: 700; color: #111827; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-provider { font-size: 14px; color: #6b7280; margin-bottom: 4px; }
+    .card-rating-row { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+    .card-star { font-size: 16px; }
+    .card-star.gold { color: #F5A623; }
+    .card-star.gray { color: #9ca3af; }
+    .card-rating-num { font-size: 14px; font-weight: 600; color: #374151; }
+    .card-dot { font-size: 14px; color: #d1d5db; margin: 0 2px; }
+    .card-pricing-inline { font-size: 13px; color: #6b7280; }
+    .card-price { font-size: 20px; font-weight: 800; color: #111827; margin-bottom: 1px; }
+    .card-price-label { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+    .card-tag { align-self: flex-start; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 14px; padding: 3px 12px; font-size: 12px; color: #555; font-weight: 500; }
+
+    /* ── States ── */
+    .state-container { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; color: #6b7280; }
+    .state-icon { font-size: 48px; margin-bottom: 14px; }
+    .state-title { font-size: 20px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+    .state-subtitle { font-size: 15px; color: #6b7280; }
+    .spinner { width: 40px; height: 40px; border: 3px solid rgba(13,148,136,0.2); border-top-color: #0d9488; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ════════════════════════════════════════════════════════════════════
+       FILTER DRAWER (right-side slide-in panel)
+       ════════════════════════════════════════════════════════════════════ */
+    .filter-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      display: none;
+    }
+    .filter-overlay.visible { display: flex; }
+
+    .filter-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4);
+      opacity: 0; transition: opacity 0.3s ease;
+    }
+    .filter-overlay.active .filter-backdrop { opacity: 1; }
+
+    .filter-drawer {
+      position: absolute; top: 0; right: 0; bottom: 0;
+      width: 340px; max-width: 80vw;
+      background: #ffffff;
+      box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+      display: flex; flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .filter-overlay.active .filter-drawer { transform: translateX(0); }
+
+    /* ── Filter Header ── */
+    .filter-header {
+      display: flex; align-items: center;
+      padding: 16px; border-bottom: 1px solid #f0f0f0;
+    }
+    .clear-all-btn {
+      background: #0d9488; color: #fff; border: none;
+      border-radius: 16px; padding: 6px 14px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .clear-all-btn:hover { background: #0f766e; }
+    .filter-title { flex: 1; font-size: 17px; font-weight: 700; color: #111827; text-align: center; }
+    .filter-close-btn {
+      width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+      background: none; border: none; font-size: 20px; color: #374151; cursor: pointer;
+    }
+
+    /* ── Filter Body ── */
+    .filter-body { flex: 1; overflow-y: auto; padding: 16px; }
+    .filter-body::-webkit-scrollbar { width: 5px; }
+    .filter-body::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+
+    .filter-section-title { font-size: 17px; font-weight: 700; color: #111827; margin-bottom: 12px; }
+    .filter-section-title.mt { margin-top: 24px; }
+
+    /* ── Radio buttons ── */
+    .radio-row {
+      display: flex; align-items: center;
+      margin-bottom: 14px; cursor: pointer;
+      user-select: none;
+    }
+    .radio-outer {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 2px solid #d1d5db;
+      display: flex; align-items: center; justify-content: center;
+      margin-right: 12px; flex-shrink: 0;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .radio-outer.active { border-color: #0d9488; background: #0d9488; }
+    .radio-inner { width: 10px; height: 10px; border-radius: 50%; background: #fff; display: none; }
+    .radio-outer.active .radio-inner { display: block; }
+    .radio-label { font-size: 16px; color: #374151; }
+
+    /* ── Chips ── */
+    .chips-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      border: 1px solid #d1d5db; border-radius: 20px;
+      padding: 8px 16px; font-size: 14px; font-weight: 500;
+      color: #374151; background: #fff; cursor: pointer;
+      transition: all 0.2s; user-select: none;
+    }
+    .chip:hover { border-color: #0d9488; }
+    .chip.active { background: #0d9488; border-color: #0d9488; color: #fff; }
+
+    /* ── Category rows ── */
+    .cat-row {
+      display: flex; align-items: center;
+      padding: 14px; border: 1px solid #e5e7eb; border-radius: 12px;
+      margin-bottom: 8px; cursor: pointer;
+      transition: all 0.2s; user-select: none;
+    }
+    .cat-row:hover { border-color: #0d9488; }
+    .cat-row.active { background: #e6faf8; border-color: #0d9488; }
+    .cat-icon { font-size: 20px; margin-right: 12px; flex-shrink: 0; }
+    .cat-name { flex: 1; font-size: 15px; font-weight: 500; color: #374151; }
+    .cat-row.active .cat-name { color: #0d9488; font-weight: 600; }
+    .cat-chevron { font-size: 22px; color: #9ca3af; font-weight: 300; }
+
+    /* ── Apply button ── */
+    .apply-btn-wrap { padding: 12px 16px; border-top: 1px solid #f0f0f0; }
+    .apply-btn {
+      width: 100%; padding: 16px; background: #0d9488; color: #fff;
+      border: none; border-radius: 25px; font-size: 17px; font-weight: 700;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .apply-btn:hover { background: #0f766e; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h2 style="margin-top: 0;">Bustler Autocomplete Demo</h2>
-    <p style="color: #6b7280; margin-bottom: 24px;">Try typing "photo", "web", or "plumber". Your recent searches are saved privately on this device.</p>
-    
-    <div class="search-container" style="display: flex; gap: 8px; align-items: flex-start;">
-      <div style="position: relative; width: 100%;">
-        <input type="text" id="searchInput" class="search-input" placeholder="Search services..." autocomplete="off" />
-        <div id="dropdown" class="dropdown">
-          <div id="dropdownContent"></div>
-        </div>
+    <h2>Bustler AI Search (PostgreSQL + AI)</h2>
+    <div class="search-container">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search for anything..." autocomplete="off">
+      <div class="dropdown" id="dropdown"><div id="dropdownContent"></div></div>
+    </div>
+    <button class="search-btn" id="searchBtn">Search</button>
+  </div>
+
+  <!-- ── Full-Screen Results ── -->
+  <div class="results-overlay" id="resultsOverlay">
+    <div class="teal-header">
+      <div class="header-top-row">
+        <button class="header-icon-btn" id="backBtn">←</button>
+        <button class="header-icon-btn" id="hamburgerBtn">☰</button>
       </div>
-      <button id="searchBtn" style="padding: 12px 24px; background: #6366f1; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s;">Search</button>
+      <div class="header-search-row">
+        <div class="header-search-bar">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="headerSearchInput" placeholder="Search..." autocomplete="off">
+          <button class="clear-btn" id="headerClearBtn">✕</button>
+        </div>
+        <button class="search-arrow-btn" id="headerSearchBtn">→</button>
+        <!-- Header Dropdown -->
+        <div class="dropdown" id="headerDropdown" style="top: 100%; left: 16px; right: 66px; margin-top: -10px;"><div id="headerDropdownContent"></div></div>
+      </div>
+      <div class="hero-title">Search Bustles</div>
+      <div class="hero-subtitle">Find the perfect bustle for your needs</div>
+    </div>
+    <div class="results-body" id="resultsBody"></div>
+  </div>
+
+  <!-- ── Filter & Categories Drawer ── -->
+  <div class="filter-overlay" id="filterOverlay">
+    <div class="filter-backdrop" id="filterBackdrop"></div>
+    <div class="filter-drawer">
+      <div class="filter-header">
+        <button class="clear-all-btn" id="clearAllBtn">Clear All</button>
+        <span class="filter-title">Filter & Categories</span>
+        <button class="filter-close-btn" id="filterCloseBtn">✕</button>
+      </div>
+      <div class="filter-body" id="filterBody">
+        <!-- Sort By -->
+        <div class="filter-section-title">Sort By</div>
+        <div id="sortBySection"></div>
+
+        <!-- Price Type -->
+        <div class="filter-section-title mt">Price Type</div>
+        <div class="chips-row" id="priceTypeSection"></div>
+
+        <!-- Minimum Rating -->
+        <div class="filter-section-title mt">Minimum Rating</div>
+        <div class="chips-row" id="ratingSection"></div>
+
+        <!-- Browse Categories -->
+        <div class="filter-section-title mt" id="catTitle" style="display:none">Browse Categories</div>
+        <div id="categoriesSection"></div>
+      </div>
+      <div class="apply-btn-wrap">
+        <button class="apply-btn" id="applyFiltersBtn">Apply Filters</button>
+      </div>
     </div>
   </div>
 
   <script>
+    // ─── Helpers ──────────────────────────────────────────────────────
+    const AVATAR_COLORS = ['#E17076','#7BC862','#E5A645','#65AADD','#A695E7','#EE7AAE','#6EC9CB','#FAA774','#E47272','#82C272','#5FBED5','#C49BDE','#F4845F','#7986CB','#4DB6AC'];
+    const CAT_ICONS = { cleaning:'🧹', beauty:'💄', repair:'🔧', photography:'📷', tutoring:'📚', fitness:'💪', design:'🎨', writing:'✍️', modeling:'🧊', translation:'🌐' };
+
+    function hashStr(s) { let h=0; for(let i=0;i<s.length;i++){h=s.charCodeAt(i)+((h<<5)-h);h=h&h;} return Math.abs(h); }
+    function avatarColor(s) { return s ? AVATAR_COLORS[hashStr(s)%AVATAR_COLORS.length] : AVATAR_COLORS[0]; }
+    function initials(t) { if(!t) return '?'; const w=t.trim().split(/\s+/).filter(x=>x.length>0); if(!w.length) return '?'; if(w.length===1) return w[0].substring(0,2).toUpperCase(); return (w[0][0]+w[1][0]).toUpperCase(); }
+    function fmtPrice(c) { if(c==null) return ''; return '₹'+Math.round(c/100).toLocaleString('en-IN'); }
+    function pricingLabel(t) { return t==='hourly'?'Hourly Price':t==='custom'?'Project Price':'Fixed Price'; }
+    function pricingTag(t) { return t==='hourly'?'Hourly':t==='custom'?'Flexible':'Fixed'; }
+    function catIcon(name) { if(!name) return '📂'; const l=name.toLowerCase(); for(const[k,v] of Object.entries(CAT_ICONS)) if(l.includes(k)) return v; return '📂'; }
+    function tryImg(images) { if(!images||typeof images!=='string') return null; try { const p=JSON.parse(images.replace(/'/g,'"')); if(Array.isArray(p)&&p.length>0&&p[0]) return p[0]; } catch{} return null; }
+
+    // ─── DOM refs ────────────────────────────────────────────────────
     const input = document.getElementById('searchInput');
     const searchBtn = document.getElementById('searchBtn');
     const dropdown = document.getElementById('dropdown');
-    const content = document.getElementById('dropdownContent');
+    const ddContent = document.getElementById('dropdownContent');
+    const overlay = document.getElementById('resultsOverlay');
+    const backBtn = document.getElementById('backBtn');
+    const hamburgerBtn = document.getElementById('hamburgerBtn');
+    const resultsBody = document.getElementById('resultsBody');
+    const headerInput = document.getElementById('headerSearchInput');
+    const headerClearBtn = document.getElementById('headerClearBtn');
+    const headerSearchBtn = document.getElementById('headerSearchBtn');
+
+    // Filter refs
+    const filterOverlay = document.getElementById('filterOverlay');
+    const filterBackdrop = document.getElementById('filterBackdrop');
+    const filterCloseBtn = document.getElementById('filterCloseBtn');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    const applyFiltersBtn = document.getElementById('applyFiltersBtn');
+
     let debounceTimer;
+    let rawResults = []; // unfiltered results from API
+    let allCategories = [];
 
-    // ── User History (localStorage — private per device, no DB) ──
-    const HISTORY_KEY = 'bustler_search_history';
-    const MAX_HISTORY = 10;
+    // ── Filter state ──
+    let filters = { sortBy: 'popular', priceType: null, minRating: null, categoryId: null };
 
-    function getHistory() {
-      try {
-        const raw = localStorage.getItem(HISTORY_KEY);
-        return raw ? JSON.parse(raw) : [];
-      } catch { return []; }
-    }
+    // ── History ──
+    const HKEY = 'bustler_search_history';
+    function getHistory() { try { return JSON.parse(localStorage.getItem(HKEY))||[]; } catch { return []; } }
+    function addHistory(t) { const n=t.trim().toLowerCase(); if(!n) return; let h=getHistory().filter(x=>x!==n); h.unshift(n); if(h.length>10) h=h.slice(0,10); localStorage.setItem(HKEY,JSON.stringify(h)); }
+    function clearHistory() { localStorage.removeItem(HKEY); showIdleDD(); }
 
-    function addToHistory(term) {
-      const normalized = term.trim().toLowerCase();
-      if (!normalized) return;
-
-      let history = getHistory();
-      // Remove duplicate if exists (so it moves to top)
-      history = history.filter(h => h !== normalized);
-      // Add to front (most recent first)
-      history.unshift(normalized);
-      // Cap at MAX_HISTORY
-      if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
-
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-    }
-
-    function clearHistory() {
-      localStorage.removeItem(HISTORY_KEY);
-      showIdleDropdown();
-    }
-
-    // ── Trending (global, from server — only 2) ──
+    // ── Trending ──
     let trending = [];
-    fetch('http://localhost:3001/api/search/trending')
-      .then(res => res.json())
-      .then(data => { trending = data.trending || []; });
+    fetch('http://localhost:3001/api/search/trending').then(r=>r.json()).then(d=>{trending=d.trending||[];});
+    fetch('http://localhost:3001/api/search/categories').then(r=>r.json()).then(d=>{allCategories=d.categories||[];});
 
-    // ── Render helpers ──
+    // ── Dropdown ──
+    function renderSec(title, items, icon) {
+      if(!items.length) return '';
+      let h=`<div class="section-label">${title}</div>`;
+      items.forEach(i=>{ h+=`<div class="dd-item" onclick="selItem('${i.replace(/'/g,"\\'")}')"><span class="icon">${icon}</span><span>${i}</span></div>`; });
+      return h;
+    }
+    function showIdleDD() {
+      const hist=getHistory(); let h='';
+      if(trending.length>0) h+=renderSec('Trending',trending.slice(0,2),'🔥');
+      if(hist.length>0) { h+=renderSec('Recent Searches',hist,'🕐'); h+=`<div class="clear-history" onclick="clearHistory()">Clear history</div>`; }
+      if(h){ddContent.innerHTML=h;dropdown.classList.add('visible');} else dropdown.classList.remove('visible');
+    }
+    window.selItem=function(i){input.value=i;dropdown.classList.remove('visible');};
 
-    function renderSection(title, items, icon) {
-      if (items.length === 0) return '';
-      let html = `<div class="section-label">${title}</div>`;
-      items.forEach(item => {
-        html += `<div class="item" onclick="selectItem('${item.replace(/'/g, "\\'")}')">
-          <span class="icon">${icon}</span>
-          <span>${item}</span>
-        </div>`;
-      });
-      return html;
+    // ── Results overlay ──
+    function openOverlay(){overlay.classList.add('visible');overlay.offsetHeight;overlay.classList.add('active');}
+    function closeOverlay(){overlay.classList.remove('active');closeFilter();setTimeout(()=>overlay.classList.remove('visible'),400);}
+    backBtn.addEventListener('click',closeOverlay);
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(filterOverlay.classList.contains('visible'))closeFilter();else if(overlay.classList.contains('visible'))closeOverlay();}});
+
+    // ── Header search ──
+    const headerDropdown = document.getElementById('headerDropdown');
+    const headerDdContent = document.getElementById('headerDropdownContent');
+    window.selHeaderItem=function(i){headerInput.value=i;headerDropdown.classList.remove('visible');headerClearBtn.classList.add('show');doSearch(i);};
+    function renderHeaderSec(title, items, icon) {
+      if(!items.length) return '';
+      let h=`<div class="section-label">${title}</div>`;
+      items.forEach(i=>{ h+=`<div class="dd-item" onclick="selHeaderItem('${i.replace(/'/g,"\\'")}')"><span class="icon">${icon}</span><span>${i}</span></div>`; });
+      return h;
     }
 
-    function showIdleDropdown() {
-      const history = getHistory();
-      let html = '';
+    function showHeaderIdleDD() {
+      const hist=getHistory(); let h='';
+      if(trending.length>0) h+=renderHeaderSec('Trending',trending.slice(0,2),'🔥');
+      if(hist.length>0) { h+=renderHeaderSec('Recent Searches',hist,'🕐'); h+=`<div class="clear-history" onclick="clearHistory(); showHeaderIdleDD();">Clear history</div>`; }
+      if(h){headerDdContent.innerHTML=h;headerDropdown.classList.add('visible');} else headerDropdown.classList.remove('visible');
+    }
 
-      // Trending section (max 2, server-side global)
-      if (trending.length > 0) {
-        html += renderSection('Trending', trending.slice(0, 2), '🔥');
+    headerInput.addEventListener('focus',()=>{if(headerInput.value.trim()==='')showHeaderIdleDD();});
+    headerInput.addEventListener('input',e=>{
+      const q=e.target.value.trim(); clearTimeout(debounceTimer);
+      headerClearBtn.classList.toggle('show',q.length>0);
+      if(q===''){showHeaderIdleDD();return;}
+      headerDdContent.innerHTML='<div class="dd-loading">Searching...</div>';headerDropdown.classList.add('visible');
+      debounceTimer=setTimeout(()=>{
+        fetch(`http://localhost:3001/api/search/suggestions?q=${encodeURIComponent(q)}`).then(r=>r.json()).then(d=>{
+          if(d.suggestions&&d.suggestions.length>0)headerDdContent.innerHTML=renderHeaderSec('Suggestions',d.suggestions,'🔍');
+          else headerDdContent.innerHTML='<div class="dd-loading">No matches found</div>';
+        });
+      },300);
+    });
+
+    headerClearBtn.addEventListener('click',()=>{
+      headerInput.value='';
+      headerClearBtn.classList.remove('show');
+      headerInput.focus();
+      showHeaderIdleDD();
+    });
+    headerSearchBtn.addEventListener('click',()=>{const q=headerInput.value.trim();if(q){headerDropdown.classList.remove('visible');doSearch(q);}});
+    headerInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const q=headerInput.value.trim();if(q){headerDropdown.classList.remove('visible');doSearch(q);}}});
+    document.addEventListener('click',e=>{if(!e.target.closest('.header-search-row'))headerDropdown.classList.remove('visible');});
+
+    // ══════════════════════════════════════════════════════════════════
+    // FILTER DRAWER
+    // ══════════════════════════════════════════════════════════════════
+    function openFilter(){filterOverlay.classList.add('visible');filterOverlay.offsetHeight;filterOverlay.classList.add('active');renderFilterUI();}
+    function closeFilter(){filterOverlay.classList.remove('active');setTimeout(()=>filterOverlay.classList.remove('visible'),350);}
+    hamburgerBtn.addEventListener('click',openFilter);
+    filterBackdrop.addEventListener('click',closeFilter);
+    filterCloseBtn.addEventListener('click',closeFilter);
+
+    function countActive(){let n=0;if(filters.sortBy!=='popular')n++;if(filters.priceType)n++;if(filters.minRating)n++;if(filters.categoryId)n++;return n;}
+
+    clearAllBtn.addEventListener('click',()=>{
+      filters={sortBy:'popular',priceType:null,minRating:null,categoryId:null};
+      renderFilterUI();
+    });
+
+    applyFiltersBtn.addEventListener('click',()=>{
+      closeFilter();
+      renderResults();
+    });
+
+    function renderFilterUI() {
+      // Sort By
+      const sortOpts=[{k:'popular',l:'Most Popular'},{k:'rated',l:'Highest Rated'},{k:'price_low',l:'Price: Low to High'},{k:'price_high',l:'Price: High to Low'},{k:'newest',l:'Newest First'}];
+      document.getElementById('sortBySection').innerHTML = sortOpts.map(o=>`
+        <div class="radio-row" onclick="filters.sortBy='${o.k}';renderFilterUI()">
+          <div class="radio-outer ${filters.sortBy===o.k?'active':''}"><div class="radio-inner"></div></div>
+          <span class="radio-label">${o.l}</span>
+        </div>
+      `).join('');
+
+      // Price Type
+      const ptOpts=[{k:'fixed',l:'Fixed Price'},{k:'hourly',l:'Hourly Rate'},{k:'custom',l:'Custom Quota'}];
+      document.getElementById('priceTypeSection').innerHTML = ptOpts.map(o=>`
+        <div class="chip ${filters.priceType===o.k?'active':''}" onclick="filters.priceType=filters.priceType==='${o.k}'?null:'${o.k}';renderFilterUI()">${o.l}</div>
+      `).join('');
+
+      // Minimum Rating
+      const rOpts=[{k:4.5,l:'4.5+'},{k:4.0,l:'4.0+'},{k:3.5,l:'3.5+'},{k:3.0,l:'3.0+'}];
+      document.getElementById('ratingSection').innerHTML = rOpts.map(o=>`
+        <div class="chip ${filters.minRating===o.k?'active':''}" onclick="filters.minRating=filters.minRating===${o.k}?null:${o.k};renderFilterUI()">★ ${o.l}</div>
+      `).join('');
+
+      // Browse Categories (only those present in results)
+      const catIds = new Set(rawResults.map(r=>r.category_id));
+      const cats = allCategories.filter(c=>catIds.has(c.id));
+      const catTitle = document.getElementById('catTitle');
+      const catSection = document.getElementById('categoriesSection');
+      if(cats.length>0){
+        catTitle.style.display='block';
+        catSection.innerHTML = cats.map(c=>`
+          <div class="cat-row ${filters.categoryId===c.id?'active':''}" onclick="filters.categoryId=filters.categoryId==='${c.id}'?null:'${c.id}';renderFilterUI()">
+            <span class="cat-icon">${catIcon(c.name)}</span>
+            <span class="cat-name">${c.name}</span>
+            <span class="cat-chevron">›</span>
+          </div>
+        `).join('');
+      } else { catTitle.style.display='none'; catSection.innerHTML=''; }
+
+      // Update apply button count
+      const n = countActive();
+      applyFiltersBtn.textContent = n > 0 ? `Apply Filters (${n})` : 'Apply Filters';
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // FILTER + SORT LOGIC (client-side)
+    // ══════════════════════════════════════════════════════════════════
+    function applyFilters(list) {
+      let res = [...list];
+      if(filters.priceType) res = res.filter(r=>r.pricing_type===filters.priceType);
+      if(filters.minRating) res = res.filter(r=>r.rating && Number(r.rating)>=filters.minRating);
+      if(filters.categoryId) res = res.filter(r=>r.category_id===filters.categoryId);
+
+      switch(filters.sortBy){
+        case 'rated': res.sort((a,b)=>(Number(b.rating)||0)-(Number(a.rating)||0)); break;
+        case 'price_low': res.sort((a,b)=>(a.base_price_cents||0)-(b.base_price_cents||0)); break;
+        case 'price_high': res.sort((a,b)=>(b.base_price_cents||0)-(a.base_price_cents||0)); break;
+        case 'newest': res.sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)); break;
+        default: res.sort((a,b)=>(b.total_bookings||0)-(a.total_bookings||0));
       }
+      return res;
+    }
 
-      // User history section (localStorage, private)
-      if (history.length > 0) {
-        html += renderSection('Recent Searches', history, '🕐');
-        html += `<div class="clear-history" onclick="clearHistory()">Clear history</div>`;
-      }
+    // ── Build card ──
+    function buildCard(res) {
+      const url=tryImg(res.images); const col=avatarColor(res.provider_id||res.title); const ini=initials(res.title);
+      const price=fmtPrice(res.base_price_cents); const plbl=pricingLabel(res.pricing_type); const tag=pricingTag(res.pricing_type);
+      const rat=res.rating?Number(res.rating).toFixed(1):'0.0'; const sc=(res.rating&&res.rating>=4)?'gold':'gray';
+      const thumb=url?`<img src="${url}" alt="${res.title}" onerror="this.parentElement.innerHTML='<div class=\\'card-avatar\\' style=\\'background:${col}\\'>${ini}</div>'">`:`<div class="card-avatar" style="background:${col}">${ini}</div>`;
+      return `<div class="result-card">
+        <div class="card-thumbnail">${thumb}</div>
+        <div class="card-info">
+          <div class="card-title">${res.title}</div>
+          <div class="card-provider">by Service Provider</div>
+          <div class="card-rating-row"><span class="card-star ${sc}">★</span><span class="card-rating-num">${rat}</span><span class="card-dot">•</span><span class="card-pricing-inline">${tag}</span></div>
+          ${price?`<div class="card-price">${price}</div><div class="card-price-label">${plbl}</div>`:''}
+          <span class="card-tag">${tag}</span>
+        </div>
+      </div>`;
+    }
 
-      if (html) {
-        content.innerHTML = html;
-        dropdown.classList.add('visible');
+    // ── Render filtered results ──
+    function renderResults() {
+      const filtered = applyFilters(rawResults);
+      const n = filtered.length;
+      if(n===0){
+        resultsBody.innerHTML=`<div class="result-count">0 bustles found</div><div class="state-container"><div class="state-icon">🔍</div><div class="state-title">No bustles found</div><div class="state-subtitle">Try adjusting your filters</div></div>`;
       } else {
-        dropdown.classList.remove('visible');
+        resultsBody.innerHTML=`<div class="result-count">${n} bustle${n!==1?'s':''} found</div>`+filtered.map(buildCard).join('');
       }
     }
 
-    // ── Event: select an item ──
-    window.selectItem = function(item) {
-      input.value = item;
-      dropdown.classList.remove('visible');
-    };
+    // ── Main search ──
+    function doSearch(q) {
+      addHistory(q);
+      fetch('http://localhost:3001/api/search/record',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})})
+        .then(()=>fetch('http://localhost:3001/api/search/trending')).then(r=>r.json()).then(d=>{trending=d.trending||[];}).catch(()=>{});
 
-    // ── Execute Search ──
-    function performSearch() {
-      const q = input.value.trim();
-      if (!q) return;
+      resultsBody.innerHTML=`<div class="state-container"><div class="spinner"></div><div class="state-subtitle">Finding the best services...</div></div>`;
+      openOverlay();
 
-      // 1. Save to local user history
-      addToHistory(q);
-      dropdown.classList.remove('visible');
-
-      // 2. Record for trending globally on server
-      fetch('http://localhost:3001/api/search/record', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q })
-      }).catch(err => console.error('Failed to record trending:', err));
-
-      alert('Simulating search for: ' + q + '\\n(User history saved & trending updated)');
+      fetch(`http://localhost:3001/api/search/results?q=${encodeURIComponent(q)}`)
+        .then(r=>r.json()).then(data=>{
+          rawResults = data.results && Array.isArray(data.results) ? data.results : [];
+          renderResults();
+        }).catch(()=>{
+          rawResults=[];
+          resultsBody.innerHTML=`<div class="state-container"><div class="state-icon">⚠️</div><div class="state-title">Something went wrong</div><div class="state-subtitle">Please try again</div></div>`;
+        });
     }
 
-    // ── Event: Search Button Click ──
-    searchBtn.addEventListener('click', performSearch);
+    function performSearch(){const q=input.value.trim();if(!q)return;dropdown.classList.remove('visible');headerInput.value=q;headerClearBtn.classList.add('show');doSearch(q);}
 
-    // ── Event: focus (show trending + history) ──
-    input.addEventListener('focus', () => {
-      if (input.value.trim() === '') {
-        showIdleDropdown();
-      }
+    // ── Event listeners ──
+    searchBtn.addEventListener('click',performSearch);
+    input.addEventListener('focus',()=>{if(input.value.trim()==='')showIdleDD();});
+    input.addEventListener('input',e=>{
+      const q=e.target.value.trim(); clearTimeout(debounceTimer);
+      if(q===''){showIdleDD();return;}
+      ddContent.innerHTML='<div class="dd-loading">Searching...</div>';dropdown.classList.add('visible');
+      debounceTimer=setTimeout(()=>{
+        fetch(`http://localhost:3001/api/search/suggestions?q=${encodeURIComponent(q)}`).then(r=>r.json()).then(d=>{
+          if(d.suggestions&&d.suggestions.length>0)ddContent.innerHTML=renderSec('Suggestions',d.suggestions,'🔍');
+          else ddContent.innerHTML='<div class="dd-loading">No matches found</div>';
+        });
+      },300);
     });
-
-    // ── Event: typing (autocomplete from server) ──
-    input.addEventListener('input', (e) => {
-      const q = e.target.value.trim();
-      clearTimeout(debounceTimer);
-      
-      if (q === '') {
-        showIdleDropdown();
-        return;
-      }
-
-      content.innerHTML = '<div class="loading">Searching...</div>';
-      dropdown.classList.add('visible');
-
-      debounceTimer = setTimeout(() => {
-        fetch(`http://localhost:3001/api/search/suggestions?q=${encodeURIComponent(q)}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.suggestions && data.suggestions.length > 0) {
-              content.innerHTML = renderSection('Suggestions', data.suggestions, '🔍');
-            } else {
-              content.innerHTML = '<div class="loading">No matches found</div>';
-            }
-          });
-      }, 300);
-    });
-
-    // ── Event: Enter key (save to history) ──
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        performSearch();
-      }
-    });
-
-    // ── Event: click outside (hide dropdown) ──
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.search-container')) {
-        dropdown.classList.remove('visible');
-      }
-    });
+    input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();performSearch();}});
+    document.addEventListener('click',e=>{if(!e.target.closest('.search-container'))dropdown.classList.remove('visible');});
   </script>
 </body>
 </html>

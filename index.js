@@ -1,509 +1,447 @@
-// search-plugin/index.js
-// Bustler AI Search & Trending Plugin — Backend Core
-// Drop-in plugin for any Express.js codebase. Integrates with 2 lines of code.
-// All internal APIs use REST. No database required. No modifications to existing files.
-
 'use strict';
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
-const fetch = require('node-fetch');
-const { pipeline } = require('@xenova/transformers');
+const db = require('./db');
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const HUGGINGFACE_API_URL  = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
-const SKILLS_FILE          = path.join(__dirname, 'skills.json');
-const CACHE_FILE           = path.join(__dirname, 'query_cache.json');
-const COUNTS_FILE          = path.join(__dirname, 'search_counts.json');
-const VECTORS_FILE         = path.join(__dirname, 'skill_vectors.json');
-const CACHE_SAVE_INTERVAL  = 10 * 60 * 1000; // 10 minutes
-const COUNTS_SAVE_INTERVAL = 5 * 60 * 1000;  // 5 minutes
-const MIN_SIMILARITY       = 0.3;
-const MAX_SUGGESTIONS      = 5;
-const MAX_TRENDING         = 2;
-const VECTOR_BATCH_SIZE    = 20;              // skills per API batch
-const VECTOR_BATCH_DELAY   = 500;             // ms between batches (rate-limit safety)
+const CACHE_FILE = path.join(__dirname, 'query_cache.json');
+const COUNTS_FILE = path.join(__dirname, 'search_counts.json');
+const VECTORS_FILE = path.join(__dirname, 'skill_vectors.json');
+const CACHE_SAVE_INTERVAL = 10 * 60 * 1000;
+const COUNTS_SAVE_INTERVAL = 5 * 60 * 1000;
+const MIN_SIMILARITY = 0.2;
+const MAX_SUGGESTIONS = 5;
+// Minimum characters needed before we call the HF API for semantic search.
+// Trie + Fuzzy handle anything shorter for free (zero API tokens).
+const MIN_SEMANTIC_LENGTH = 3;
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
+// In-flight deduplication: if two callers ask for the same vector simultaneously,
+// they share one pending HF request instead of firing two.
+const inFlight = new Map();
 
-let serviceTerms     = [];    // loaded from skills.json on startup
-let serviceVectors   = [];    // in-memory vectors: [{ term, vector }]
-let skillVectorCache = {};    // persisted to skill_vectors.json: { term: [floats] }
-let queryCache       = {};    // { normalizedQuery: [float] } — cached query vectors
-let searchCounts     = {};    // { term: count }
-let isReady          = false; // true once all service vectors are pre-computed
-let trieRoot         = null;  // Trie root node, built on init()
-let extractor        = null;  // Local model for vectorizing search queries
-
-// ---------------------------------------------------------------------------
-// 1. loadSkills()
-// ---------------------------------------------------------------------------
-
-function loadSkills() {
-  try {
-    const raw = fs.readFileSync(SKILLS_FILE, 'utf8');
-    serviceTerms = JSON.parse(raw);
-
-    if (!Array.isArray(serviceTerms) || serviceTerms.length === 0) {
-      throw new Error('skills.json is empty or not a valid array');
-    }
-
-    console.log(`[search-plugin] Loaded ${serviceTerms.length} service terms from skills.json`);
-  } catch (err) {
-    // Intentionally throw — the plugin cannot function without the skills corpus
-    throw new Error(`[search-plugin] Failed to load skills.json: ${err.message}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 2. loadFiles()
-// ---------------------------------------------------------------------------
+let categories = [];
+let services = [];
+let vectorCache = {};
+let queryCache = {};
+let searchCounts = {};
+let isReady = false;
+let trieRoot = null;
+let hfToken = null;
 
 function loadFiles() {
-  // Load query cache
   try {
-    if (fs.existsSync(CACHE_FILE)) {
-      const raw = fs.readFileSync(CACHE_FILE, 'utf8');
-      queryCache = JSON.parse(raw);
-    } else {
-      queryCache = {};
-    }
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to load query_cache.json — resetting:', err.message);
-    queryCache = {};
-  }
-
-  // Load search counts
-  try {
-    if (fs.existsSync(COUNTS_FILE)) {
-      const raw = fs.readFileSync(COUNTS_FILE, 'utf8');
-      searchCounts = JSON.parse(raw);
-    } else {
-      searchCounts = {};
-    }
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to load search_counts.json — resetting:', err.message);
-    searchCounts = {};
-  }
+    if (fs.existsSync(CACHE_FILE)) queryCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    if (fs.existsSync(COUNTS_FILE)) searchCounts = JSON.parse(fs.readFileSync(COUNTS_FILE, 'utf8'));
+  } catch (e) {}
 }
-
-// ---------------------------------------------------------------------------
-// 3. saveFiles()
-// ---------------------------------------------------------------------------
 
 function saveFiles() {
   try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(queryCache, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to save query_cache.json:', err.message);
-  }
-
-  try {
-    fs.writeFileSync(COUNTS_FILE, JSON.stringify(searchCounts, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to save search_counts.json:', err.message);
-  }
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(queryCache, null, 2));
+    fs.writeFileSync(COUNTS_FILE, JSON.stringify(searchCounts, null, 2));
+  } catch (e) {}
 }
-
-// ---------------------------------------------------------------------------
-// 3b. loadVectors() / saveVectors() — skill vector cache persistence
-// ---------------------------------------------------------------------------
 
 function loadVectors() {
   try {
-    if (fs.existsSync(VECTORS_FILE)) {
-      const raw = fs.readFileSync(VECTORS_FILE, 'utf8');
-      skillVectorCache = JSON.parse(raw);
-      console.log(`[search-plugin] Loaded ${Object.keys(skillVectorCache).length} cached skill vectors from skill_vectors.json`);
-    } else {
-      skillVectorCache = {};
-    }
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to load skill_vectors.json — resetting:', err.message);
-    skillVectorCache = {};
-  }
+    if (fs.existsSync(VECTORS_FILE)) vectorCache = JSON.parse(fs.readFileSync(VECTORS_FILE, 'utf8'));
+  } catch (e) {}
 }
 
 function saveVectors() {
   try {
-    fs.writeFileSync(VECTORS_FILE, JSON.stringify(skillVectorCache), 'utf8');
-    console.log(`[search-plugin] Saved ${Object.keys(skillVectorCache).length} skill vectors to skill_vectors.json`);
-  } catch (err) {
-    console.error('[search-plugin ERROR] Failed to save skill_vectors.json:', err.message);
-  }
+    fs.writeFileSync(VECTORS_FILE, JSON.stringify(vectorCache));
+  } catch (e) {}
 }
-
-// Removed getVectorsBatch as it was for the HuggingFace API and is no longer needed
-// 3d. precomputeVectors() — vectorize all skills, cache to disk
-//     Only calls the API for skills not already in skill_vectors.json.
-//     Batches API calls in groups of VECTOR_BATCH_SIZE with delays.
-// ---------------------------------------------------------------------------
-
-async function precomputeVectors() {
-  loadVectors();
-
-  let missingCount = 0;
-  // Populate the in-memory serviceVectors array for fast lookups
-  serviceVectors = [];
-  for (const term of serviceTerms) {
-    const lowerTerm = term.toLowerCase();
-    let vec = skillVectorCache[lowerTerm];
-    
-    if (!vec) {
-      console.log(`[search-plugin] Computing missing vector locally for: ${term}`);
-      vec = await getVector(lowerTerm);
-      if (vec) {
-        skillVectorCache[lowerTerm] = vec;
-        missingCount++;
-      }
-    }
-
-    if (vec) {
-      serviceVectors.push({ term, vector: vec });
-    }
-  }
-
-  if (missingCount > 0) {
-    saveVectors();
-  }
-
-  console.log(`[search-plugin] ${serviceVectors.length}/${serviceTerms.length} skills have vectors ready for semantic search.`);
-}
-
-// ---------------------------------------------------------------------------
-// 4. getVector(text) — REST call to HuggingFace Inference API
-// ---------------------------------------------------------------------------
 
 async function getVector(text) {
-  try {
-    if (!extractor) {
-      console.error('[search-plugin ERROR] Local model not loaded yet');
-      return null;
-    }
-    
-    // Vectorize the single query string locally
-    const output = await extractor(text, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
-  } catch (err) {
-    console.error('[search-plugin ERROR] getVector() failed:', err.message);
-    return null;
-  }
-}
+  // Dedup: return the same promise if a request for this text is already in-flight
+  if (inFlight.has(text)) return inFlight.get(text);
 
-// ---------------------------------------------------------------------------
-// 5. cosineSimilarity(vecA, vecB) — pure math, no async
-// ---------------------------------------------------------------------------
+  const promise = (async () => {
+    try {
+      if (!hfToken) return null;
+      const url = 'https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction';
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${hfToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputs: text })
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (Array.isArray(data) && Array.isArray(data[0])) return data[0];
+      if (Array.isArray(data)) return data;
+      return null;
+    } catch (err) {
+      return null;
+    } finally {
+      inFlight.delete(text);
+    }
+  })();
+
+  inFlight.set(text, promise);
+  return promise;
+}
 
 function cosineSimilarity(vecA, vecB) {
   if (!vecA || !vecB || vecA.length === 0 || vecB.length === 0) return 0;
-
-  try {
-    let dot  = 0;
-    let magA = 0;
-    let magB = 0;
-
-    for (let i = 0; i < vecA.length; i++) {
-      dot  += vecA[i] * vecB[i];
-      magA += vecA[i] * vecA[i];
-      magB += vecB[i] * vecB[i];
-    }
-
-    const magnitude = Math.sqrt(magA) * Math.sqrt(magB);
-    if (magnitude === 0) return 0;
-
-    return dot / magnitude;
-  } catch (err) {
-    console.error('[search-plugin ERROR] cosineSimilarity() failed:', err.message);
-    return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    magA += vecA[i] * vecA[i];
+    magB += vecB[i] * vecB[i];
   }
+  const magnitude = Math.sqrt(magA) * Math.sqrt(magB);
+  return magnitude === 0 ? 0 : dot / magnitude;
 }
-
-// ---------------------------------------------------------------------------
-// 6. Trie (Prefix Tree) — O(k) lookup, k = query length
-//    The most efficient data structure for character-by-character prefix match.
-//    Each node stores a map of children keyed by character.
-//    Terminal nodes store the original skill string.
-// ---------------------------------------------------------------------------
 
 class TrieNode {
   constructor() {
-    this.children = {};   // { char: TrieNode }
-    this.isEnd    = false;
-    this.term     = null; // original skill string at terminal nodes
+    this.children = {};
+    this.isEnd = false;
+    this.items = [];
   }
 }
 
-/**
- * Build the Trie from the serviceTerms array.
- * Called once during init(). O(n * m) where n = terms, m = avg term length.
- */
-function buildTrie() {
+function insertTrie(text, item) {
+  if (!text) return;
+  let node = trieRoot;
+  for (const ch of text.toLowerCase()) {
+    if (!node.children[ch]) node.children[ch] = new TrieNode();
+    node = node.children[ch];
+  }
+  node.isEnd = true;
+  node.items.push(item);
+}
+
+async function init(token) {
+  hfToken = token || process.env.HF_TOKEN;
+  loadFiles();
+  loadVectors();
+
+  console.log('[search-plugin] Fetching data from database...');
+  try {
+    categories = await db('categories').select('id', 'name', 'description');
+    services = await db('services').select('id', 'category_id', 'title', 'description', 'short_description', 'total_bookings', 'base_price_cents', 'rating', 'total_reviews', 'provider_id', 'images', 'pricing_type');
+  } catch(e) {
+    console.error('Error fetching from DB:', e);
+  }
+
   trieRoot = new TrieNode();
+  for (const cat of categories) insertTrie(cat.name, { type: 'category', text: cat.name, id: cat.id });
+  for (const srv of services) insertTrie(srv.title, { type: 'service', text: srv.title, id: srv.id });
 
-  for (const term of serviceTerms) {
-    let node = trieRoot;
-    const lower = term.toLowerCase();
-
-    for (const ch of lower) {
-      if (!node.children[ch]) {
-        node.children[ch] = new TrieNode();
-      }
-      node = node.children[ch];
+  let missing = 0;
+  for (const cat of categories) {
+    if (!vectorCache[cat.id]) {
+      vectorCache[cat.id] = await getVector(`${cat.name} ${cat.description || ''}`.trim());
+      missing++;
     }
-
-    node.isEnd = true;
-    node.term  = term; // preserve original casing
+  }
+  for (const srv of services) {
+    if (!vectorCache[srv.id]) {
+      vectorCache[srv.id] = await getVector(`${srv.title} ${srv.short_description || ''} ${srv.description || ''}`.trim());
+      missing++;
+    }
   }
 
-  console.log(`[search-plugin] Trie built with ${serviceTerms.length} terms.`);
+  if (missing > 0) saveVectors();
+  isReady = true;
+
+  setInterval(saveFiles, CACHE_SAVE_INTERVAL);
+  setInterval(saveFiles, COUNTS_SAVE_INTERVAL);
+  console.log(`[search-plugin] Init complete. Ready for searches. (Loaded ${categories.length} categories, ${services.length} services)`);
 }
 
-/**
- * Collect up to `limit` completions below a given Trie node using DFS.
- * Returns as soon as `limit` results are found — no wasted traversal.
- */
-function collectFromNode(node, results, limit) {
-  if (results.length >= limit) return;
-
-  if (node.isEnd) {
-    results.push(node.term);
-    if (results.length >= limit) return;
-  }
-
-  // Traverse children in alphabetical order for consistent results
-  const keys = Object.keys(node.children).sort();
-  for (const ch of keys) {
-    collectFromNode(node.children[ch], results, limit);
-    if (results.length >= limit) return;
-  }
-}
-
-/**
- * Trie-based prefix search.
- * 1. Walk the trie character by character following the query — O(k)
- * 2. If any character has no child, return [] instantly (no match)
- * 3. Collect completions via DFS from the landing node — stops at MAX_SUGGESTIONS
- *
- * For multi-word queries (e.g. "web dev"), also searches each word in the
- * query against word boundaries in multi-word skills.
- */
 function prefixMatch(query) {
-  if (!query || query.length === 0 || !trieRoot) return [];
-
-  try {
-    const q = query.toLowerCase().trim();
-    if (q.length === 0) return [];
-
-    // --- Primary: Trie walk for exact prefix ---
-    let node = trieRoot;
-    for (const ch of q) {
-      if (!node.children[ch]) {
-        node = null;
-        break;
-      }
-      node = node.children[ch];
-    }
-
-    const results = [];
-    if (node) {
-      collectFromNode(node, results, MAX_SUGGESTIONS);
-    }
-
-    // If we already have enough, return immediately
-    if (results.length >= MAX_SUGGESTIONS) {
-      return results.slice(0, MAX_SUGGESTIONS);
-    }
-
-    // --- Secondary: word-boundary match for multi-word queries ---
-    // e.g. typing "dev" also finds "web developer", "game developer"
-    const seen = new Set(results.map(t => t.toLowerCase()));
-    for (const term of serviceTerms) {
-      if (results.length >= MAX_SUGGESTIONS) break;
-      const t = term.toLowerCase();
-      if (!seen.has(t) && (t.includes(` ${q}`) || t.includes(`-${q}`))) {
-        results.push(term);
-        seen.add(t);
-      }
-    }
-
-    return results.slice(0, MAX_SUGGESTIONS);
-  } catch (err) {
-    console.error('[search-plugin ERROR] prefixMatch() failed:', err.message);
-    return [];
+  if (!query || !trieRoot) return [];
+  let node = trieRoot;
+  for (const ch of query.toLowerCase()) {
+    if (!node.children[ch]) return [];
+    node = node.children[ch];
   }
+  const results = [];
+  function collect(n, lim) {
+    if (results.length >= lim) return;
+    if (n.isEnd) results.push(...n.items);
+    for (const c of Object.keys(n.children).sort()) {
+      collect(n.children[c], lim);
+      if (results.length >= lim) return;
+    }
+  }
+  collect(node, MAX_SUGGESTIONS * 3);
+  return results;
 }
 
 // ---------------------------------------------------------------------------
-// 7. semanticMatch(query) — AI vector similarity with cache
-//    1. Get query vector (from queryCache or API call)
-//    2. Compare against all pre-computed serviceVectors via cosine similarity
-//    3. Return top matches above MIN_SIMILARITY threshold
+// Damerau-Levenshtein (Optimal String Alignment variant)
+// Handles: insert, delete, replace, AND transposition (swapped adjacent chars)
+// e.g. "teh" → "the" = 1 edit (not 2 like standard Levenshtein)
 // ---------------------------------------------------------------------------
+function damerauLevenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
 
-async function semanticMatch(query) {
-  try {
-    // Skip if vectors aren't ready or no service vectors exist
-    if (!isReady || serviceVectors.length === 0) return [];
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
 
-    const normalised = query.toLowerCase().trim();
-    if (!normalised) return [];
-
-    // 1. Get query vector — check cache first, then API
-    let queryVector = queryCache[normalised];
-
-    if (!queryVector) {
-      queryVector = await getVector(normalised);
-      if (!queryVector) {
-        // API call failed — fall back to prefix-only results
-        return [];
-      }
-      // Cache the query vector for future use
-      queryCache[normalised] = queryVector;
-    }
-
-    // 2. Compute cosine similarity against all service vectors
-    const scored = [];
-    for (const { term, vector } of serviceVectors) {
-      const sim = cosineSimilarity(queryVector, vector);
-      if (sim >= MIN_SIMILARITY) {
-        scored.push({ term, score: sim });
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,       // deletion
+        dp[i][j - 1] + 1,       // insertion
+        dp[i - 1][j - 1] + cost // substitution
+      );
+      // Transposition: if current chars are a swap of the previous two
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + cost);
       }
     }
-
-    // 3. Sort descending by similarity, return top results
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, MAX_SUGGESTIONS).map(s => s.term);
-  } catch (err) {
-    console.error('[search-plugin ERROR] semanticMatch() failed:', err.message);
-    return [];
   }
+  return dp[m][n];
 }
 
-// ---------------------------------------------------------------------------
-// 8. getSuggestions(query) — main exported function
-// ---------------------------------------------------------------------------
+// Fuzzy match query against each word inside a title.
+// Tolerance: 1 edit per 4 chars of the query (min 1, max 3).
+function fuzzyMatch(query) {
+  if (!query) return [];
+  const q = query.toLowerCase();
+  const tolerance = Math.min(3, Math.max(1, Math.floor(q.length / 4)));
+  const scored = [];
+
+  const allItems = [
+    ...categories.map(c => ({ type: 'category', text: c.name, id: c.id })),
+    ...services.map(s => ({ type: 'service', text: s.title, id: s.id }))
+  ];
+
+  for (const item of allItems) {
+    if (!item.text) continue;
+    const words = item.text.toLowerCase().split(/\s+/);
+    // Score = best (lowest) edit distance across all individual words in the title
+    let bestDist = Infinity;
+    for (const word of words) {
+      if (Math.abs(word.length - q.length) > tolerance + 1) continue; // fast skip
+      const dist = damerauLevenshtein(q, word);
+      if (dist < bestDist) bestDist = dist;
+    }
+    // Also check edit distance of query against the full title (good for short titles)
+    const fullDist = damerauLevenshtein(q, item.text.toLowerCase());
+    if (fullDist < bestDist) bestDist = fullDist;
+
+    if (bestDist <= tolerance) {
+      scored.push({ ...item, dist: bestDist });
+    }
+  }
+
+  // Sort by edit distance ascending (closest match first)
+  scored.sort((a, b) => a.dist - b.dist);
+  return scored;
+}
+
+// Substring (contains) match — catches partial mid-word typing like "inst" → "Installation"
+function substringMatch(query) {
+  if (!query || query.length < 2) return [];
+  const q = query.toLowerCase();
+  const results = [];
+
+  const allItems = [
+    ...categories.map(c => ({ type: 'category', text: c.name, id: c.id })),
+    ...services.map(s => ({ type: 'service', text: s.title, id: s.id }))
+  ];
+
+  for (const item of allItems) {
+    if (!item.text) continue;
+    if (item.text.toLowerCase().includes(q)) {
+      results.push(item);
+    }
+  }
+  return results;
+}
 
 async function getSuggestions(query) {
-  try {
-    if (!query || query.length < 1) return [];
+  if (!isReady || !query.trim()) return [];
+  const q = query.toLowerCase().trim();
 
-    // Normalise query
-    const trimmed = query.trim();
-    if (trimmed.length === 0) return [];
+  // 1. Exact prefix match (Trie) — zero cost
+  const prefixResults = prefixMatch(q);
 
-    // Security: reject excessively long queries
-    if (trimmed.length > 100) return [];
+  // 2. Fuzzy match (Damerau-Levenshtein) — zero cost, pure JS
+  const fuzzyResults = fuzzyMatch(q);
 
-    // Run both matching strategies in parallel
-    const [prefixResults, semanticResults] = await Promise.all([
-      prefixMatch(trimmed),
-      semanticMatch(trimmed),
-    ]);
+  // 3. Substring match (contains) — zero cost, catches mid-word typing
+  const substringResults = substringMatch(q);
 
-    // Merge and deduplicate (case insensitive)
+  // SHORT-CIRCUIT: if cheap layers already found enough suggestions,
+  // skip the HF API call entirely — this is the biggest token saver.
+  const cheapResults = [...prefixResults, ...fuzzyResults, ...substringResults];
+  if (cheapResults.length >= MAX_SUGGESTIONS) {
     const seen = new Set();
-    const merged = [];
-
-    for (const term of [...prefixResults, ...semanticResults]) {
-      const key = term.toLowerCase();
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(term);
+    const final = [];
+    for (const item of cheapResults) {
+      if (!seen.has(item.text.toLowerCase())) {
+        seen.add(item.text.toLowerCase());
+        final.push(item.text);
       }
-      if (merged.length >= MAX_SUGGESTIONS) break;
+      if (final.length >= MAX_SUGGESTIONS) break;
     }
-
-    return merged;
-  } catch (err) {
-    console.error('[search-plugin ERROR] getSuggestions() failed:', err.message);
-    return [];
+    return final;
   }
+
+  // 3. Semantic vector match — only if query is long enough AND we need more results
+  let qVector = null;
+  if (q.length >= MIN_SEMANTIC_LENGTH) {
+    qVector = queryCache[q];
+    if (!qVector) {
+      qVector = await getVector(q);
+      if (qVector) {
+        queryCache[q] = qVector;
+        // Save immediately so restarts don't recompute this (saves tokens on every boot)
+        saveFiles();
+      }
+    }
+  }
+
+  const semanticCats = [];
+  const semanticSrvs = [];
+  if (qVector) {
+    for (const cat of categories) {
+      const sim = cosineSimilarity(qVector, vectorCache[cat.id]);
+      if (sim >= MIN_SIMILARITY) semanticCats.push({ type: 'category', text: cat.name, id: cat.id, sim });
+    }
+    for (const srv of services) {
+      const sim = cosineSimilarity(qVector, vectorCache[srv.id]);
+      if (sim >= MIN_SIMILARITY) semanticSrvs.push({ type: 'service', text: srv.title, id: srv.id, sim });
+    }
+  }
+
+  let topCatSim = semanticCats.length ? Math.max(...semanticCats.map(c => c.sim)) : 0;
+  let topSrvSim = semanticSrvs.length ? Math.max(...semanticSrvs.map(s => s.sim)) : 0;
+
+  // AI Reasoning: decide whether to lead with categories or services
+  const leadWithCategories = topCatSim > topSrvSim + 0.05;
+
+  // Build candidate list: prefix (exact) → fuzzy → substring → semantic
+  let merged = [];
+  if (leadWithCategories) {
+    merged = [
+      ...prefixResults.filter(p => p.type === 'category').map(p => p.text),
+      ...fuzzyResults.filter(f => f.type === 'category').map(f => f.text),
+      ...substringResults.filter(s => s.type === 'category').map(s => s.text),
+      ...semanticCats.sort((a, b) => b.sim - a.sim).map(c => c.text)
+    ];
+  } else {
+    merged = [
+      ...prefixResults.filter(p => p.type === 'service').map(p => p.text),
+      ...fuzzyResults.filter(f => f.type === 'service').map(f => f.text),
+      ...substringResults.filter(s => s.type === 'service').map(s => s.text),
+      ...semanticSrvs.sort((a, b) => b.sim - a.sim).map(s => s.text)
+    ];
+  }
+
+  // Fallback: if still nothing, mix everything
+  if (merged.length === 0) {
+    merged = [
+      ...prefixResults.map(p => p.text),
+      ...fuzzyResults.map(f => f.text),
+      ...substringResults.map(s => s.text),
+      ...semanticCats.map(c => c.text),
+      ...semanticSrvs.map(s => s.text)
+    ];
+  }
+
+  // Deduplicate, preserve priority order
+  const seen = new Set();
+  const final = [];
+  for (const item of merged) {
+    if (!seen.has(item.toLowerCase())) {
+      seen.add(item.toLowerCase());
+      final.push(item);
+    }
+    if (final.length >= MAX_SUGGESTIONS) break;
+  }
+  return final;
 }
 
-// ---------------------------------------------------------------------------
-// 9. recordSearch(term)
-// ---------------------------------------------------------------------------
+async function search(query) {
+  if (!isReady || !query.trim()) return [];
+  const q = query.toLowerCase().trim();
+  
+  let qVector = queryCache[q];
+  if (!qVector) {
+    qVector = await getVector(q);
+    if (qVector) queryCache[q] = qVector;
+  }
+
+  if (!qVector) return [];
+
+  const catMap = {};
+  for (const cat of categories) {
+    catMap[cat.id] = cat.name;
+  }
+
+  const results = [];
+  for (const srv of services) {
+    const sim = cosineSimilarity(qVector, vectorCache[srv.id]);
+    if (sim >= MIN_SIMILARITY) {
+      results.push({ ...srv, category_name: catMap[srv.category_id] || '', sim });
+    }
+  }
+
+  results.sort((a, b) => {
+    if (Math.abs(a.sim - b.sim) < 0.05) {
+      return (b.total_bookings || 0) - (a.total_bookings || 0);
+    }
+    return b.sim - a.sim;
+  });
+
+  return results.slice(0, 10);
+}
+
+function getCategories() {
+  return categories.map(c => ({ id: c.id, name: c.name }));
+}
 
 function recordSearch(term) {
-  try {
-    const normalised = term.toLowerCase().trim();
-    if (!normalised) return;
-
-    searchCounts[normalised] = (searchCounts[normalised] || 0) + 1;
-  } catch (err) {
-    console.error('[search-plugin ERROR] recordSearch() failed:', err.message);
-  }
+  if (!term.trim()) return;
+  const t = term.toLowerCase().trim();
+  searchCounts[t] = (searchCounts[t] || 0) + 1;
 }
-
-// ---------------------------------------------------------------------------
-// 10. getTrending() — second exported function
-// ---------------------------------------------------------------------------
 
 function getTrending() {
-  try {
-    const entries = Object.entries(searchCounts);
-    if (entries.length === 0) return [];
-
-    return entries
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, MAX_TRENDING)
-      .map(([term]) => term);
-  } catch (err) {
-    console.error('[search-plugin ERROR] getTrending() failed:', err.message);
-    return [];
-  }
+  return Object.entries(searchCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(e => e[0]);
 }
 
-// ---------------------------------------------------------------------------
-// 11. init() — setup function, called once on server startup
-// ---------------------------------------------------------------------------
-
-async function init() {
+async function handleNewService(serviceId) {
   try {
-
-    // Load the skills corpus from skills.json (throws if missing)
-    loadSkills();
-
-    // Build the Trie index for O(k) prefix lookups
-    buildTrie();
-
-    // Restore persisted state from JSON files (query cache, search counts)
-    loadFiles();
-
-    console.log(`[search-plugin] Loaded ${serviceTerms.length} service terms with Trie index for autocomplete.`);
-
-    // Load local model for queries
-    console.log('[search-plugin] Loading local embedding model for queries...');
-    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    console.log('[search-plugin] Local model loaded.');
-
-    // Load precomputed vectors
-    await precomputeVectors();
-    isReady = true;
-
-    // Start auto-save intervals
-    setInterval(saveFiles, CACHE_SAVE_INTERVAL);
-    setInterval(saveFiles, COUNTS_SAVE_INTERVAL);
-
-    console.log(`[search-plugin] Ready. Prefix + Semantic search enabled for ${serviceTerms.length} terms.`);
-  } catch (err) {
-    console.error('[search-plugin ERROR] init() failed:', err.message);
+    const srv = await db('services').select('id', 'category_id', 'title', 'description', 'short_description', 'total_bookings', 'base_price_cents', 'rating', 'total_reviews', 'provider_id', 'images', 'pricing_type').where({ id: serviceId }).first();
+    if (!srv) return false;
+    services.push(srv);
+    insertTrie(srv.title, { type: 'service', text: srv.title, id: srv.id });
+    
+    const vec = await getVector(`${srv.title} ${srv.short_description || ''} ${srv.description || ''}`.trim());
+    if (vec) {
+      vectorCache[srv.id] = vec;
+      saveVectors();
+    }
+    return true;
+  } catch(e) {
+    console.error('Webhook error:', e);
+    return false;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Exports — the 3 public functions any codebase calls
-// ---------------------------------------------------------------------------
 
 module.exports = {
   init,
   getSuggestions,
+  search,
   getTrending,
   recordSearch,
-  saveFiles,
+  handleNewService,
+  getCategories
 };

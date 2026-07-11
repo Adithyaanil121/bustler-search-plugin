@@ -6,6 +6,7 @@
 
 const express = require('express');
 const search  = require('./index');
+require('dotenv').config();
 
 const app  = express();
 const PORT = 3001;
@@ -15,7 +16,7 @@ const PORT = 3001;
 // ---------------------------------------------------------------------------
 (async () => {
   // init() loads skills.json internally — no terms argument needed
-  await search.init();
+  await search.init(process.env.HF_TOKEN);
 
   // ---------------------------------------------------------------------------
   // REST API Endpoints
@@ -59,6 +60,51 @@ const PORT = 3001;
   });
 
   /**
+   * GET /api/search/results?q={query}
+   * Returns the final search results (services only) sorted by vector similarity and bookings.
+   */
+  app.get('/api/search/results', async (req, res) => {
+    try {
+      const query = req.query.q || '';
+      const results = await search.search(query);
+      res.json({ results });
+    } catch (err) {
+      console.error('[test-server] /api/search/results error:', err.message);
+      res.status(500).json({ results: [] });
+    }
+  });
+
+  /**
+   * GET /api/search/categories
+   * Returns all available categories for the filter drawer.
+   */
+  app.get('/api/search/categories', (req, res) => {
+    try {
+      const categories = search.getCategories();
+      res.json({ categories });
+    } catch (err) {
+      console.error('[test-server] /api/search/categories error:', err.message);
+      res.status(500).json({ categories: [] });
+    }
+  });
+
+  /**
+   * POST /api/search/webhook/service-created
+   * Triggers vector calculation and caches a newly added service to the Trie and memory.
+   */
+  app.post('/api/search/webhook/service-created', async (req, res) => {
+    try {
+      const { serviceId } = req.body;
+      if (!serviceId) return res.status(400).json({ success: false, error: 'Missing serviceId' });
+      const success = await search.handleNewService(serviceId);
+      res.json({ success });
+    } catch (err) {
+      console.error('[test-server] /api/search/webhook error:', err.message);
+      res.status(500).json({ success: false });
+    }
+  });
+
+  /**
    * POST /api/search/record
    * Records a confirmed search for trending calculation and saves to disk immediately.
    *
@@ -69,7 +115,6 @@ const PORT = 3001;
       const query = req.body.query;
       if (query && query.trim()) {
         search.recordSearch(query);
-        search.saveFiles(); // Save cache to file immediately
       }
       res.json({ success: true });
     } catch (err) {

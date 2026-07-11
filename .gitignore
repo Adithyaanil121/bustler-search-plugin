@@ -4,5 +4,19 @@ query_cache.json
 search_counts.json
 skill_vectors.json
 *.mp4
+!search_plugin_demo_full.mp4
 *.webp
 scratch/
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# API Keys
+.env
+.env.local
+
+# Databases
+*.sqlite
