@@ -1,6 +1,6 @@
-require('dotenv').config();
-const knex = require('knex');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+const knex = require('knex');
 
 const config = process.env.DATABASE_URL
   ? {
@@ -11,7 +11,7 @@ const config = process.env.DATABASE_URL
   : {
       client: 'sqlite3',
       connection: {
-        filename: path.join(__dirname, 'test_database.sqlite')
+        filename: path.join(__dirname, '../../data/cache/test_database.sqlite')
       },
       useNullAsDefault: true
     };

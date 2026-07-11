@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
-const db = require('./db');
+const db = require('../src/core/db');
 
 async function seedTable(tableName, csvFileName, schemaDef) {
-  const filePath = path.join(__dirname, 'dummy_data', csvFileName);
+  const filePath = path.join(__dirname, '../data/dummy_data', csvFileName);
   
   // Drop table if exists
   await db.schema.dropTableIfExists(tableName);

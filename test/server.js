@@ -5,8 +5,8 @@
 'use strict';
 
 const express = require('express');
-const search  = require('./index');
-require('dotenv').config();
+const search  = require('../src/core/index');
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
 const app  = express();
 const PORT = 3001;

@@ -2,9 +2,9 @@
   "name": "search-plugin",
   "version": "1.0.0",
   "description": "Bustler AI Search & Trending Plugin",
-  "main": "index.js",
+  "main": "src/core/index.js",
   "scripts": {
-    "test-server": "node test-server.js"
+    "test-server": "node test/server.js"
   },
   "dependencies": {
     "@huggingface/inference": "^4.13.19",

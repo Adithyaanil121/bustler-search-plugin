@@ -21,7 +21,7 @@ const { PuppeteerScreenRecorder } = require('puppeteer-screen-recorder');
   });
 
   console.log('Navigating to page...');
-  await page.goto('http://localhost:3001/test.html');
+  await page.goto('http://localhost:3001/index.html');
   console.log('Starting recording...');
   await recorder.start('search_plugin_demo_full.mp4');
 

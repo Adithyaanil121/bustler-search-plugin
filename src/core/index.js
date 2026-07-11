@@ -6,9 +6,9 @@ const db = require('./db');
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const CACHE_FILE = path.join(__dirname, 'query_cache.json');
-const COUNTS_FILE = path.join(__dirname, 'search_counts.json');
-const VECTORS_FILE = path.join(__dirname, 'skill_vectors.json');
+const CACHE_FILE = path.join(__dirname, '../../data/cache', 'query_cache.json');
+const COUNTS_FILE = path.join(__dirname, '../../data/cache', 'search_counts.json');
+const VECTORS_FILE = path.join(__dirname, '../../data/cache', 'skill_vectors.json');
 const CACHE_SAVE_INTERVAL = 10 * 60 * 1000;
 const COUNTS_SAVE_INTERVAL = 5 * 60 * 1000;
 const MIN_SIMILARITY = 0.2;
