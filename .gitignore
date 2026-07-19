@@ -1,6 +1,7 @@
 node_modules/
 .DS_Store
-data/cache/
+data/cache/*
+!data/cache/.gitkeep
 media/*.mp4
 !media/search_plugin_demo_full.mp4
 *.webp
