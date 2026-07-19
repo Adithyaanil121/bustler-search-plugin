@@ -340,7 +340,7 @@
     let allCategories = [];
 
     // ── Filter state ──
-    let filters = { sortBy: 'popular', priceType: null, minRating: null, categoryId: null };
+    let filters = { sortBy: 'relevance', priceType: null, minRating: null, categoryId: null };
 
     // ── History ──
     const HKEY = 'bustler_search_history';
@@ -439,7 +439,7 @@
 
     function renderFilterUI() {
       // Sort By
-      const sortOpts=[{k:'popular',l:'Most Popular'},{k:'rated',l:'Highest Rated'},{k:'price_low',l:'Price: Low to High'},{k:'price_high',l:'Price: High to Low'},{k:'newest',l:'Newest First'}];
+      const sortOpts=[{k:'relevance',l:'AI Relevance'},{k:'popular',l:'Most Popular'},{k:'rated',l:'Highest Rated'},{k:'price_low',l:'Price: Low to High'},{k:'price_high',l:'Price: High to Low'},{k:'newest',l:'Newest First'}];
       document.getElementById('sortBySection').innerHTML = sortOpts.map(o=>`
         <div class="radio-row" onclick="filters.sortBy='${o.k}';renderFilterUI()">
           <div class="radio-outer ${filters.sortBy===o.k?'active':''}"><div class="radio-inner"></div></div>
@@ -490,11 +490,12 @@
       if(filters.categoryId) res = res.filter(r=>r.category_id===filters.categoryId);
 
       switch(filters.sortBy){
+        case 'popular': res.sort((a,b)=>(b.total_bookings||0)-(a.total_bookings||0)); break;
         case 'rated': res.sort((a,b)=>(Number(b.rating)||0)-(Number(a.rating)||0)); break;
         case 'price_low': res.sort((a,b)=>(a.base_price_cents||0)-(b.base_price_cents||0)); break;
         case 'price_high': res.sort((a,b)=>(b.base_price_cents||0)-(a.base_price_cents||0)); break;
         case 'newest': res.sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)); break;
-        default: res.sort((a,b)=>(b.total_bookings||0)-(a.total_bookings||0));
+        default: break; // 'relevance' — preserve backend AI similarity order
       }
       return res;
     }

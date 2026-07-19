@@ -24,7 +24,10 @@ By passing through this plugin first, your existing database never has to deal w
 ## ✨ Features
 
 - **Lightning-Fast Autocomplete:** Uses an optimized Trie (Prefix Tree) data structure in memory to return instantaneous suggestions as the user types.
-- **Semantic (Smart) Search:** Runs a local AI model to understand the *meaning* of words. If a user types conversational queries, it maps them to official marketplace skills.
+- **Semantic (Smart) Search (3-Layer Architecture):** Runs a local AI model to understand the *meaning* of words. It uses an intelligent 3-layer fallback system:
+  1. **Layer 1 (Direct Service Match):** Searches directly for highly relevant services (similarity >= 0.4).
+  2. **Layer 2 (Category Fallback):** If no specific service matches well enough, it matches the user's intent to broad categories (similarity >= 0.3) and returns all relevant services under that category.
+  3. **Layer 3 (Tiered Sorting):** Solves non-transitive sorting bugs by rounding similarity scores into logical "tiers," and falling back to a strict multi-level tie-breaker (Tier -> Rating -> Bookings).
 - **Auto-Healing Vector Database:** If you add a new skill to `skills.json` and restart the server, the plugin automatically detects the new skill, computes its AI vector locally, and saves it. Zero maintenance code required.
 - **Trending Searches:** Quietly tracks search counts to provide a live list of "Trending Skills" when the search bar is empty.
 

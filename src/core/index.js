@@ -11,7 +11,8 @@ const COUNTS_FILE = path.join(__dirname, '../../data/cache', 'search_counts.json
 const VECTORS_FILE = path.join(__dirname, '../../data/cache', 'skill_vectors.json');
 const CACHE_SAVE_INTERVAL = 10 * 60 * 1000;
 const COUNTS_SAVE_INTERVAL = 5 * 60 * 1000;
-const MIN_SIMILARITY = 0.2;
+const SERVICE_MIN_SIMILARITY = 0.2;
+const CATEGORY_MIN_SIMILARITY = 0.2;
 const MAX_SUGGESTIONS = 5;
 // Minimum characters needed before we call the HF API for semantic search.
 // Trie + Fuzzy handle anything shorter for free (zero API tokens).
@@ -309,11 +310,11 @@ async function getSuggestions(query) {
   if (qVector) {
     for (const cat of categories) {
       const sim = cosineSimilarity(qVector, vectorCache[cat.id]);
-      if (sim >= MIN_SIMILARITY) semanticCats.push({ type: 'category', text: cat.name, id: cat.id, sim });
+      if (sim >= CATEGORY_MIN_SIMILARITY) semanticCats.push({ type: 'category', text: cat.name, id: cat.id, sim });
     }
     for (const srv of services) {
       const sim = cosineSimilarity(qVector, vectorCache[srv.id]);
-      if (sim >= MIN_SIMILARITY) semanticSrvs.push({ type: 'service', text: srv.title, id: srv.id, sim });
+      if (sim >= SERVICE_MIN_SIMILARITY) semanticSrvs.push({ type: 'service', text: srv.title, id: srv.id, sim });
     }
   }
 
@@ -382,19 +383,58 @@ async function search(query) {
     catMap[cat.id] = cat.name;
   }
 
-  const results = [];
+  // Layer 1: Direct Service Similarity
+  let results = [];
   for (const srv of services) {
     const sim = cosineSimilarity(qVector, vectorCache[srv.id]);
-    if (sim >= MIN_SIMILARITY) {
+    if (sim >= SERVICE_MIN_SIMILARITY) {
       results.push({ ...srv, category_name: catMap[srv.category_id] || '', sim });
     }
   }
 
-  results.sort((a, b) => {
-    if (Math.abs(a.sim - b.sim) < 0.05) {
-      return (b.total_bookings || 0) - (a.total_bookings || 0);
+  // Layer 3: Category Fallback
+  if (results.length === 0) {
+    let bestCat = null;
+    let bestCatSim = 0;
+    for (const cat of categories) {
+      const catSim = cosineSimilarity(qVector, vectorCache[cat.id]);
+      if (catSim > bestCatSim) {
+        bestCatSim = catSim;
+        bestCat = cat;
+      }
     }
-    return b.sim - a.sim;
+
+    if (bestCat && bestCatSim >= CATEGORY_MIN_SIMILARITY) {
+      for (const srv of services) {
+        if (srv.category_id === bestCat.id) {
+          // Calculate exact sim to query for sorting purposes, even if it's < SERVICE_MIN_SIMILARITY
+          const sim = cosineSimilarity(qVector, vectorCache[srv.id]);
+          results.push({ ...srv, category_name: catMap[srv.category_id] || '', sim });
+        }
+      }
+    }
+  }
+
+  // Layer 2: Sorting and Rating Tie-Breaker
+  results.sort((a, b) => {
+    // Step 1: Round similarity to 2 decimal places to create tiers
+    const tierA = Math.floor(a.sim * 100);
+    const tierB = Math.floor(b.sim * 100);
+
+    // Step 2: Sort by tier first
+    if (tierA !== tierB) {
+      return tierB - tierA;
+    }
+
+    // Step 3: Within the same tier, sort by rating
+    const ratingA = a.rating || 0;
+    const ratingB = b.rating || 0;
+    if (ratingA !== ratingB) {
+      return ratingB - ratingA;
+    }
+
+    // Step 4: Final tie-breaker fallback to total_bookings
+    return (b.total_bookings || 0) - (a.total_bookings || 0);
   });
 
   return results.slice(0, 10);
